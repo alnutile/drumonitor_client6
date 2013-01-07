@@ -1,0 +1,9 @@
+name = DruMonitor Client
+description = Functions needed to push info to the Servers
+core = 6.x
+package = DruMonitor
+
+files[] = drumonitor_client.module
+configure = admin/config/system/drumonitor
+dependencies[] = update
+dependencies[] = dblog

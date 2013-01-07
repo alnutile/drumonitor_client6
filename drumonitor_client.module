@@ -1,0 +1,190 @@
+<?php
+/**
+ * Implementation of hook_menu
+ */
+function drumonitor_client_permission(){
+	return array(
+		'drumonitor_send' => array(
+			'title' => t('Send and Manage the Monitor Area'),
+			'description' => t('Send and Manage this part of the communications.'),
+		),
+	);
+}
+
+function drumonitor_client_menu() {
+  $items['admin/config/system/drumonitor'] = array(
+    'title' => 'Configure DruMonitor Site',
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('drumonitor_client_configure_form'),
+    'access callback' => 'user_access',
+    'access arguments' => array('drumonitor_send'),
+  );
+  
+  $items['system/druclient/%'] = array(
+    'title' => 'DruClient Report',
+    'page callback' => 'drumonitor_client_feeds',
+    'page arguments' => array(2),
+		'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Main Form
+ */
+function drumonitor_client_configure_form(){
+	$server = variable_get('drumonitor_client_server', 'Please Fill In');
+	$key = variable_get('drumonitor_client_key', 'Please Fill In');
+	
+	$form['key'] = array(
+    '#type' => 'textfield',
+    '#default_value' => $key,
+    '#title' => t('Please enter the key seen on your user account'),
+    '#required' => TRUE,
+  );
+	
+	$form['server'] = array(
+    '#type' => 'textfield',
+    '#default_value' => $server,
+    '#title' => t('Please enter the server url seen on your user account'),
+    '#required' => TRUE,
+  );
+  
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  );
+	
+	return $form;	
+} 
+
+function drumonitor_client_configure_form_submit($form, &$form_state) {
+  variable_set('drumonitor_client_key', $form_state['values']['key']);
+  variable_set('drumonitor_client_server', $form_state['values']['server']);
+  drupal_set_message(t('Your key %key and server %server has been saved', array('%key' => $form_state['values']['key'], '%server' => $form_state['values']['key']))); 
+}
+
+function drumonitor_server_testpage(){
+	$output = 'test';
+	return $output;
+}
+
+
+/**
+ * Find XYZ issues
+ * @param type of watchdog record
+ * good for testing
+ */
+function drumonitor_client_watchdog($type = NULL){
+	
+	$row = '';
+	$date = strtotime('-1 day');
+	$query = db_query("SELECT * FROM watchdog LIMIT 20"); //@todo trim w/ time timestamp > :date", array(':date'=>$date));
+	$link_back = $GLOBALS['base_url'];
+	if(!empty($query->num_rows)) {
+		foreach($query as $data){
+			$message = unserialize($data->variables);
+			if(array_key_exists('!message', $message)) { $message = $message['!message']; } else { $message = 'no message'; }
+			$created = date('M d y', $data->timestamp);
+			$row .= array($data->wid, l($data->wid, $GLOBALS['base_url'] . '/admin/reports/event/' . $data->wid), $data->type, $message, $created);
+		}
+		return $row;
+	}
+}
+
+/**
+ * Find XYZ issues generate xml
+ * @param type of watchdog record
+ */
+function drumonitor_client_watchdog_feed($type = NULL){
+	global $base_url, $language_content;
+	$row = '';
+	$date = strtotime('-1 day');
+	$query = db_query("SELECT * FROM watchdog WHERE timestamp >  UNIX_TIMESTAMP(DATE_SUB(NOW(), INTERVAL 1 DAY)) ORDER BY wid DESC LIMIT 12"); //@todo trim with time timestamp > :date", array(':date'=>$date));
+	$link_back = $GLOBALS['base_url'];
+	 while ($data = db_fetch_object($query)) {
+			$message = unserialize($data->variables);
+			if(array_key_exists('!message', $message)) { $message = $message['!message']; } else { $message = 'no message'; }
+			$created = date('M d y', $data->timestamp);
+			$created_timestamp = $data->timestamp;
+			$link = $base_url . '/admin/reports/event/' . $data->wid;
+			$args = array('wid' => $data->wid, 'severity' => $data->severity, 'type' => $data->type, 'hostname' => $data->hostname, 'date' => $created, 'timestamp' => $data->timestamp);
+			$row .= format_rss_item('Type ' . $data->type . ' ID' . $data->wid . ' Severity ' . $data->severity . ' Date ' . $created, $link, $message, $args);
+		}
+		return $row;
+}
+
+
+function drumonitor_client_report(){
+	$output .= drumonitor_client_watchdog();
+	return $output;
+}
+
+
+/**
+ * Find Update Status info
+ * @param type of watchdog record
+ */
+function drumonitor_client_update_report($type = NULL){
+	global $base_url, $language_content;
+	$wid = date('U');
+	$hostname = $_SERVER['SERVER_NAME'];
+	$updates = drumonitor_client_update_get_status();
+	if(count($updates)) {
+  	foreach($updates as $data) {
+  	 //print_r($data);
+  	 if($data['status'] == 1) {  
+  	   $link = $data['link'];
+  	   $message = $data['info']['name'];
+  	   //$message .= '</br>' . $data['info']['name'];
+  	   $created = date('M d Y', $data['datestamp']);
+  	   $args = array('wid' => $data['datestamp'], 'severity' => '1', 'type' => 'security', 'hostname' => $hostname, 'date' => $created, 'timestamp' => $data['datestamp']);
+  	   $row .= format_rss_item('Type Security Updates ID ' . $wid . ' Severity 10 Date ' . $created, $link, $message, $args);
+  	 }
+  	}
+	}
+	return $row;
+}
+
+function drumonitor_client_update_get_status() {
+  if ($available = update_get_available(TRUE)) {
+    module_load_include('inc', 'update', 'update.compare');
+    $data = update_calculate_project_data($available);
+    return $data;
+  }
+}
+/**
+ *Using http://api.drupal.org/api/drupal/modules%21node%21node.module/function/node_feed/7
+ *To help outptut as xml
+ */
+
+function drumonitor_client_feeds($key){
+//First check if the key exists 
+if(isset($key) && $key == variable_get('drumonitor_client_key', '')) {
+
+	global $base_url, $language_content;
+	$namespaces = array('xmlns:dc' => 'http://purl.org/dc/elements/1.1/');
+	$channel = array();
+	//Create the items array here
+	$items = drumonitor_client_update_report();
+	$items .= drumonitor_client_watchdog_feed();
+	$channel_defaults = array(
+    'version' => '2.0', 
+    'title' => variable_get('site_name', 'Drupal'), 
+    'link' => $base_url, 
+    'description' => variable_get('feed_description', ''), 
+    'language' => $language_content->language,
+  );
+  $channel_extras = array_diff_key($channel, $channel_defaults);
+  $channel = array_merge($channel_defaults, $channel);
+
+  $output = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+  $output .= "<rss version=\"" . $channel["version"] . "\" xml:base=\"" . $base_url . "\" " . drupal_attributes($namespaces) . ">\n";
+  $output .= format_rss_channel($channel['title'], $channel['link'], $channel['description'], $items, $channel['language'], $channel_extras);
+  $output .= "</rss>\n";
+
+  drupal_set_header('Content-Type: application/rss+xml');
+  print $output;
+  }
+}

@@ -1,0 +1,16 @@
+<?php
+
+/**
+ * Implements hook_uninstall().
+ * drumonitor_client_key, drumonitor_client_server
+ */
+
+function drumonitor_client_uninstall() {
+  variable_del('drumonitor_client_key');
+  variable_del('drumonitor_client_server');
+}
+
+function drumonitor_client_install() {
+  variable_set('drumonitor_client_key', 'Please Set Key');
+  variable_set('drumonitor_client_server', 'Please Set Server URL');
+}
